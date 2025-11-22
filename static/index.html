@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Reddit News — Fake/Real Predictor (Prototype)</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 30px; }
+      .card { border: 1px solid #ddd; padding: 12px; margin: 10px 0; border-radius: 6px; }
+      .title { font-weight: 600; margin-bottom: 6px; }
+      .meta { color: #666; font-size: 13px; margin-bottom: 8px; }
+      .btn { background: #007bff; color: white; padding: 6px 10px; border-radius: 4px; border: none; cursor: pointer; }
+      .result { margin-top: 8px; padding: 8px; border-radius: 6px; display: inline-block; }
+      .real { background: #d4edda; color: #155724; }
+      .fake { background: #f8d7da; color: #721c24; }
+      #posts { margin-top: 12px; }
+      #loading { color: #333; font-style: italic; }
+    </style>
+  </head>
+  <body>
+    <h2>Reddit News — Fake/Real Predictor (Prototype)</h2>
+    <p>
+      Subreddit:
+      <input id="sub" value="news" />
+      <button id="loadBtn" class="btn">Load Top 5</button>
+    </p>
+
+    <div id="posts"></div>
+
+    <script>
+    // helper - safe text node setter
+    function setText(el, txt) {
+      el.textContent = txt ?? "";
+    }
+
+    // create an element with optional class and children
+    function el(tag, className, children = []) {
+      const e = document.createElement(tag);
+      if (className) e.className = className;
+      children.forEach(child => {
+        if (typeof child === "string") e.appendChild(document.createTextNode(child));
+        else if (child instanceof Node) e.appendChild(child);
+      });
+      return e;
+    }
+
+    async function loadTop() {
+      const sub = "news";
+      const postsContainer = document.getElementById("posts");
+      postsContainer.innerHTML = "";
+      const loader = el("div", null, ["Loading..."]);
+      loader.id = "loading";
+      postsContainer.appendChild(loader);
+
+      try {
+        const res = await fetch(`/api/topnews?subreddit=${encodeURIComponent(sub)}`);
+        const data = await res.json();
+        if (!data.success || !Array.isArray(data.posts)) {
+          postsContainer.innerHTML = "<div>Failed to fetch posts.</div>";
+          return;
+        }
+        const posts = data.posts;
+        postsContainer.innerHTML = ""; // clear loader
+
+        // take up to 5 items (already sampled by backend)
+        const toShow = posts.slice(0, 5);
+
+        if (toShow.length === 0) {
+          postsContainer.appendChild(el("div", null, ["No posts found."]));
+          return;
+        }
+
+        toShow.forEach(p => {
+          // safe values
+          const id = p.id || Math.random().toString(36).slice(2, 9);
+          const title = p.title || "(no title)";
+          const url = p.url || "#";
+          const created = p.created_utc || "";
+
+          const card = el("div", "card");
+          const titleDiv = el("div", "title", [title]);
+          const meta = el("div", "meta", [ `Source: ` ]);
+          const a = document.createElement("a");
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          setText(a, "link");
+          meta.appendChild(a);
+          if (created) {
+            meta.appendChild(document.createTextNode("  •  Created: " + created));
+          }
+
+          const controls = el("div", null, []);
+          const btn = document.createElement("button");
+          btn.className = "btn";
+          setText(btn, "Predict Fake/Real");
+          btn.addEventListener("click", () => predict({ id, title, text: p.text || "" }, resultSpan, btn));
+          const resultSpan = el("span", null, []);
+          controls.appendChild(btn);
+          controls.appendChild(resultSpan);
+
+          card.appendChild(titleDiv);
+          card.appendChild(meta);
+          card.appendChild(controls);
+
+          postsContainer.appendChild(card);
+        });
+      } catch (err) {
+        console.error("LoadTop error:", err);
+        postsContainer.innerHTML = "<div>Failed to fetch posts (network error).</div>";
+      }
+    }
+
+    // Predict: sends {title,text} to /api/predict
+    async function predict(postObj, resultEl, buttonEl) {
+      if (!postObj || !postObj.title) return;
+      // disable button while predicting
+      buttonEl.disabled = true;
+      setText(resultEl, " Predicting...");
+
+      try {
+        const payload = { title: postObj.title, text: postObj.text || "" };
+        const r = await fetch("/api/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (!j || !j.success || !j.result) {
+          setText(resultEl, "Error");
+          console.error("Predict API returned:", j);
+          buttonEl.disabled = false;
+          return;
+        }
+        const out = j.result;
+        const label = out.label || "unknown";
+        const score = (typeof out.score === "number") ? out.score.toFixed(3) : (out.score || "");
+        // create label element
+        const span = el("span", `result ${label === "real" ? "real" : "fake"}`, [
+          `${label.toUpperCase()} `,
+          ` (score=${score})`,
+          el("br"),
+          el("small", null, [`model: ${out.model || "unknown"}`])
+        ]);
+        resultEl.innerHTML = "";
+        resultEl.appendChild(span);
+      } catch (err) {
+        console.error("Prediction error:", err);
+        setText(resultEl, "Request failed");
+      } finally {
+        buttonEl.disabled = false;
+      }
+    }
+
+    document.getElementById("loadBtn").addEventListener("click", loadTop);
+    window.addEventListener("DOMContentLoaded", loadTop);
+    </script>
+  </body>
+</html>
